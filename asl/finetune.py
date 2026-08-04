@@ -52,6 +52,7 @@ def build_tiles(subjects, mode="posed", verbose=True):
         running_mode=vision.RunningMode.IMAGE, num_hands=1,
         min_hand_detection_confidence=0.1, min_hand_presence_confidence=0.1)
     eng.lm = vision.HandLandmarker.create_from_options(opts)
+    eng.lm_r, eng.video, eng._ts = eng.lm, False, 0
 
     for si, subj in enumerate(subjects):
         root = os.path.join(RAW, subj, mode)

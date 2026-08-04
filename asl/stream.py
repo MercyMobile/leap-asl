@@ -123,17 +123,37 @@ def classify_motion(paths, shapes):
 # ------------------------------------------------------------------ engine
 
 class Engine:
-    def __init__(self, model_path, distortion_dir=None, device=None):
+    def __init__(self, model_path, distortion_dir=None, device=None, video=True):
         self.dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.net = Net().to(self.dev)
         self.net.load_state_dict(torch.load(model_path, map_location=self.dev))
         self.net.eval()
 
-        opts = vision.HandLandmarkerOptions(
-            base_options=mp_python.BaseOptions(model_asset_path=MODEL_TASK),
-            running_mode=vision.RunningMode.IMAGE, num_hands=1,
-            min_hand_detection_confidence=0.1, min_hand_presence_confidence=0.1)
-        self.lm = vision.HandLandmarker.create_from_options(opts)
+        # VIDEO mode, not IMAGE. IMAGE re-runs full palm detection on every frame;
+        # VIDEO tracks the hand between frames and measured 7.68ms against 15.14ms
+        # with identical detection (60/60 on the same input). Two landmarkers,
+        # because VIDEO carries temporal state -- feeding the left and right eye
+        # through one instance would have each eye corrupting the other's track.
+        # video=False gives independent-frame IMAGE mode, which is what offline
+        # tile building needs -- there, consecutive frames are different letters
+        # and tracking state would leak across them.
+        # The two eyes are NOT the same kind of stream, so they do not get the
+        # same mode. The left eye is continuous -> VIDEO, which tracks between
+        # frames and halves the cost. The right eye is sampled every
+        # STEREO_EVERY frames -> IMAGE, because VIDEO would try to track across
+        # gaps that are not there. Running the right eye in VIDEO raised the
+        # geometry-gate rejection rate from 11/20 to 16/20 on the stereo set.
+        self.video = video
+        def mk(mode):
+            return vision.HandLandmarker.create_from_options(
+                vision.HandLandmarkerOptions(
+                    base_options=mp_python.BaseOptions(model_asset_path=MODEL_TASK),
+                    running_mode=mode, num_hands=1,
+                    min_hand_detection_confidence=0.1,
+                    min_hand_presence_confidence=0.1))
+        self.lm = mk(vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE)
+        self.lm_r = mk(vision.RunningMode.IMAGE)
+        self._ts = 0            # monotonic ms, required by detect_for_video
 
         self.inv = None
         if distortion_dir:
@@ -150,12 +170,19 @@ class Engine:
         self.stats = dict(frames=0, no_hand=0, gated=0, voted=0, emitted=0)
 
     # -- perception -------------------------------------------------------
-    def _landmarks(self, gray):
+    def _landmarks(self, gray, right_eye=False):
         c = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(gray)
         up = cv2.resize(c, (640, 480), interpolation=cv2.INTER_CUBIC)
         rot = cv2.rotate(up, cv2.ROTATE_180)
         rgb = np.ascontiguousarray(cv2.cvtColor(rot, cv2.COLOR_GRAY2RGB))
-        res = self.lm.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+        img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        if right_eye:
+            res = self.lm_r.detect(img)          # always IMAGE mode
+        elif self.video:
+            self._ts += 10                       # must strictly increase
+            res = self.lm.detect_for_video(img, self._ts)
+        else:
+            res = self.lm.detect(img)
         if not res.hand_landmarks:
             return None, None
         pts = np.array([[p.x * 640, p.y * 480] for p in res.hand_landmarks[0]], np.float32)
@@ -229,9 +256,12 @@ class Engine:
             self.armed = True
             return None
 
+        # Re-check immediately after a failure rather than carrying it: a stale
+        # bad verdict would gate STEREO_EVERY frames for one bad check. Carrying
+        # a *good* verdict is safe, carrying a bad one is not.
         if gray_R is not None and self.inv is not None and \
-                self.stats["frames"] % STEREO_EVERY == 1:
-            pR, _ = self._landmarks(gray_R)
+                (not self.stereo_ok or self.stats["frames"] % STEREO_EVERY == 1):
+            pR, _ = self._landmarks(gray_R, right_eye=True)
             self.stereo_ok, self.last_knuckle = self._metric_ok(pL, pR)
         if not self.stereo_ok:
             self.stats["gated"] += 1
@@ -307,6 +337,7 @@ class Engine:
 
     def close(self):
         self.lm.close()
+        self.lm_r.close()
 
 
 # ------------------------------------------------------------------ replay
