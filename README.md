@@ -121,17 +121,60 @@ Two traps found:
   **not raise** on a zero-length anchor, it silently returns finite nonsense. Use
   `normalize_knuckles()`, which anchors on the rigid metacarpal row instead.
 
+## From classifier to reader
+
+A per-frame classifier is not a reader. Three things have to be added, and each
+is a different kind of problem:
+
+**Silence.** A softmax always sums to 1, so a bare classifier is confidently
+wrong about an empty room. `stream.py` makes "I don't know" expressible with an
+entropy ceiling and a top-two margin floor, and clears its buffer whenever the
+hand leaves.
+
+**Patience.** At 115fps a held letter spans ~30 frames. Voting across a window
+beats trusting any single frame, and it quietly recovers frames the geometry
+gates drop, because a neighbour covers the gap.
+
+**Motion.** J and Z are handshapes *plus a path*. The CNN is structurally blind
+to them. They are handled by a rule over the landmark trajectory: Z is an index
+finger reversing horizontally at least twice; J is the I handshape with the
+pinky travelling far and hooking once. Rule-based on purpose — with no training
+data for either letter, a legible rule that a signer can help tune beats a model
+fit to nothing.
+
+Verified against synthetic trajectories: J fires on a hook and not on a fist, Z
+fires on a zigzag, a held hand stays silent. **All thresholds are guesses until
+scored against a real signer.**
+
 ## Layout
 
 ```
 asl/leap_pose.py     stereo IR -> metric 3D -> .pose        (the bridge)
+asl/stream.py        rolling-window reader: voting, rejection, J/Z motion
+asl/reader.py        live server -- capture, read, serve the interface
+asl/reader.html      picture-in-picture UI: self-view skeleton + readout
+asl/capture.py       labeled capture, built for one hour with a fluent signer
+asl/score.py         per-frame vs. after-voting vs. coverage
+asl/finetune.py      adapt the ASLA-Leap model to this rig and these signers
 asl/prep_data.py     ASLA-Leap -> cached arrays
 asl/train.py         classifier, random + LOSO evaluation
-asl/live_infer2.py   live frame -> letter
 src/Recorder.c       both eyes + native verdict + distortion grids
 src/GrabImage.c      stereo PGM with brightness stats
 stereo/, h2h/        recordings the results above were measured on
 ```
+
+### Running a session
+
+```bash
+venv/bin/python asl/capture.py posed --subject interp1     # all 26, held
+venv/bin/python asl/capture.py speed --subject interp1 --words CISCO MERCY
+venv/bin/python asl/score.py --subject interp1             # the actual number
+venv/bin/python asl/finetune.py --subjects interp1         # adapt to this rig
+venv/bin/python asl/reader.py                              # live, port 8770
+```
+
+Capture is resumable and never asks a question mid-session — Ctrl-C leaves
+everything recorded so far on disk.
 
 ## Setup
 

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ASL reader</title>
+<style>
+  :root {
+    --ground:#0B0F0E; --panel:#141A19; --panel-2:#1B2321; --line:#2A3634;
+    --ink:#E8EDEB; --muted:#7E8B88; --accent:#5FD3B2; --warn:#E0A458; --bad:#D2705F;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:light){
+    :root{--ground:#EEF2F0;--panel:#fff;--panel-2:#F4F7F5;--line:#D3DCD8;
+          --ink:#10201C;--muted:#5C6B67;--accent:#1E8E71;--warn:#A9701F;--bad:#A8452F;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);line-height:1.5}
+  .wrap{max-width:1100px;margin:0 auto;padding:22px 18px 60px}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+  h1{font-size:1.2rem;font-weight:600;letter-spacing:-.01em;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+
+  .stage{position:relative;background:var(--panel);border:1px solid var(--line);
+         border-radius:14px;overflow:hidden;min-height:44vh;display:flex;
+         align-items:center;justify-content:center;padding:26px}
+  #readout{font-family:var(--mono);font-size:clamp(2rem,11vw,6rem);font-weight:600;
+           letter-spacing:.10em;text-align:center;word-break:break-all;line-height:1.15}
+  #readout .new{color:var(--accent)}
+  #readout:empty::after{content:"waiting for a hand";font-size:1rem;letter-spacing:.02em;
+           color:var(--muted);font-family:var(--ui)}
+
+  .pip{position:absolute;right:12px;bottom:12px;width:clamp(120px,24%,220px);
+       aspect-ratio:4/3;background:var(--panel-2);border:1px solid var(--line);
+       border-radius:10px;overflow:hidden}
+  .pip canvas{display:block;width:100%;height:100%}
+  .pip-bar{position:absolute;inset:auto 0 0 0;display:flex;align-items:center;gap:6px;
+           padding:4px 7px;background:color-mix(in srgb,var(--panel) 88%,transparent);
+           border-top:1px solid var(--line);font-family:var(--mono);font-size:.56rem;
+           letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+
+  .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0 20px}
+  button{font:inherit;font-size:.85rem;color:var(--ink);background:var(--panel);
+         border:1px solid var(--line);padding:8px 15px;border-radius:7px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;
+           background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .m{background:var(--panel);padding:11px 13px}
+  .m .k{font-family:var(--mono);font-size:.58rem;letter-spacing:.13em;text-transform:uppercase;
+        color:var(--muted);display:block;margin-bottom:4px}
+  .m .v{font-family:var(--mono);font-size:1.15rem;font-variant-numeric:tabular-nums}
+  .note{color:var(--muted);font-size:.85rem;margin-top:16px;max-width:66ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Live</span>
+    <h1>ASL reader</h1>
+    <span class="eyebrow" id="dev" style="color:var(--muted)"></span>
+  </header>
+
+  <div class="stage">
+    <div id="readout"></div>
+    <div class="pip">
+      <canvas id="sv"></canvas>
+      <div class="pip-bar"><span class="dot" id="dot"></span><span id="st">idle</span></div>
+    </div>
+  </div>
+
+  <div class="bar">
+    <button id="clear">Clear</button>
+    <button id="space">Space</button>
+  </div>
+
+  <div class="metrics">
+    <div class="m"><span class="k">Rate</span><span class="v" id="m-fps">—</span></div>
+    <div class="m"><span class="k">Frames</span><span class="v" id="m-frames">—</span></div>
+    <div class="m"><span class="k">No hand</span><span class="v" id="m-nohand">—</span></div>
+    <div class="m"><span class="k">Gated</span><span class="v" id="m-gated">—</span></div>
+    <div class="m"><span class="k">Letters</span><span class="v" id="m-em">—</span></div>
+  </div>
+
+  <p class="note">
+    The corner shows the hand as the machine sees it. Green means it is tracked and being read;
+    amber means a landmark was dropped by a quality gate. Nothing is committed to the readout
+    until the same letter holds steady across a run of frames.
+  </p>
+</div>
+
+<script>
+const LIMBS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+             [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const cv=document.getElementById('sv'), g=cv.getContext('2d');
+let last="", prevLen=0;
+
+function tok(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+function draw(pts, ok){
+  const dpr=Math.min(devicePixelRatio||1,2), w=cv.clientWidth, h=cv.clientHeight;
+  if(!w||!h) return;
+  cv.width=w*dpr; cv.height=h*dpr; g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,w,h);
+  if(!pts){ return; }
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const [x,y] of pts){x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);}
+  const pad=10, s=Math.min((w-2*pad)/Math.max(x1-x0,1),(h-2*pad)/Math.max(y1-y0,1));
+  const P=pts.map(([x,y])=>[(x-x0)*s+(w-(x1-x0)*s)/2,(y-y0)*s+(h-(y1-y0)*s)/2]);
+  const col = ok? tok('--accent') : tok('--warn');
+  g.strokeStyle=col; g.fillStyle=col; g.lineCap='round'; g.lineWidth=2.2;
+  for(const [a,b] of LIMBS){g.beginPath();g.moveTo(P[a][0],P[a][1]);g.lineTo(P[b][0],P[b][1]);g.stroke();}
+  for(const p of P){g.beginPath();g.arc(p[0],p[1],2.3,0,6.29);g.fill();}
+}
+
+function render(s){
+  const r=document.getElementById('readout');
+  const txt=s.text||"";
+  if(txt!==last){
+    // highlight whatever arrived since the last poll
+    const grown = txt.length>prevLen ? txt.length-prevLen : 0;
+    r.innerHTML = grown
+      ? txt.slice(0,txt.length-grown).replace(/</g,'&lt;')+'<span class="new">'+txt.slice(-grown)+'</span>'
+      : txt.replace(/</g,'&lt;');
+    prevLen=txt.length; last=txt;
+  }
+  document.getElementById('st').textContent=(s.state||'idle').toLowerCase();
+  const tracked = s.tracking && s.state!=='IDLE';
+  document.getElementById('dot').style.background = tracked? tok('--accent') : tok('--muted');
+  document.getElementById('dev').textContent=s.device||"";
+  document.getElementById('m-fps').textContent=s.fps??'—';
+  document.getElementById('m-frames').textContent=s.frames??'—';
+  document.getElementById('m-nohand').textContent=s.no_hand??'—';
+  document.getElementById('m-gated').textContent=s.gated??'—';
+  document.getElementById('m-em').textContent=s.emitted??'—';
+  draw(s.hand, s.state!=='UNSURE');
+}
+
+async function poll(){
+  try{ render(await (await fetch('/state',{cache:'no-store'})).json()); }
+  catch(e){ document.getElementById('dev').textContent='reader offline'; }
+  setTimeout(poll, 60);
+}
+poll();
+
+document.getElementById('clear').onclick=async()=>{
+  await fetch('/clear'); last=""; prevLen=0; document.getElementById('readout').textContent='';
+};
+document.getElementById('space').onclick=()=>{
+  const r=document.getElementById('readout'); r.textContent=r.textContent+' ';
+};
+</script>
+</body>
+</html>
