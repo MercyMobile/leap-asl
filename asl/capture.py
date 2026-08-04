@@ -173,14 +173,21 @@ def run(args):
     time.sleep(1.5)
 
     for i, label in enumerate(targets, 1):
-        outdir = os.path.join(RAW, args.subject, mode, label)
-        have = already_done(outdir, args.frames)
-        if have >= args.frames and not args.redo:
-            print(f"  {DIM}[{i}/{total}] {label}: already have {have} frames, skipping{RST}")
-            continue
-
         secs = args.seconds * (2 if label in DYNAMIC and mode == "posed" else 1)
         n = int(secs * 1000 / args.interval)
+
+        # Resume against what was actually asked for. A fixed threshold would
+        # treat a burst interrupted at 50 of 300 frames as finished.
+        outdir = os.path.join(RAW, args.subject, mode, label)
+        have = already_done(outdir, n)
+        if have >= n * 0.8 and not args.redo:
+            print(f"  {DIM}[{i}/{total}] {label}: have {have}/{n} frames, skipping{RST}")
+            continue
+        if have:
+            print(f"  {DIM}[{i}/{total}] {label}: only {have}/{n} frames, recapturing{RST}")
+            for f in os.listdir(outdir):
+                if f.endswith(".pgm"):
+                    os.remove(os.path.join(outdir, f))
 
         clear()
         print(f"{DIM}[{i}/{total}]  subject {args.subject}  ·  {args.hand} hand{RST}\n")

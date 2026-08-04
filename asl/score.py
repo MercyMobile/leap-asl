@@ -62,10 +62,9 @@ def score_posed(subject, model, mode="posed"):
         got = []
         for i, (fid, gl, gr) in enumerate(frames_in(d)):
             ev = eng.push(gl, gr, t=i / 100.0)
-            if eng.buf:
-                pred = eng.buf[-1][3]
+            if eng.frame_pred is not None:      # only frames that reached the CNN
                 per_frame_tot[label] += 1
-                if pred == label:
+                if eng.frame_pred == label:
                     per_frame[label] += 1
             if ev:
                 got.append(ev.letter)

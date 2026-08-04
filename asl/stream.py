@@ -135,6 +135,7 @@ class Engine:
                         build_inverse(load_distortion(os.path.join(distortion_dir, "distortion_R.txt"))))
 
         self.buf = deque(maxlen=WINDOW)       # (t, probs, pts_px, shape_letter)
+        self.frame_pred = None                # this frame's answer, or None
         self.last_letter, self.last_t = None, -1e9
         self.state = "IDLE"
         self.stats = dict(frames=0, no_hand=0, gated=0, voted=0, emitted=0)
@@ -206,6 +207,10 @@ class Engine:
     def push(self, gray_L, gray_R=None, t=None):
         t = float(self.stats["frames"]) / 115.0 if t is None else t
         self.stats["frames"] += 1
+        # What THIS frame classified as, or None if it never reached the CNN.
+        # Scoring must not fall back to reading the buffer's tail: a gated frame
+        # would then be scored using its predecessor's answer and counted twice.
+        self.frame_pred = None
 
         pL, rotL = self._landmarks(gray_L)
         if pL is None:
@@ -229,7 +234,8 @@ class Engine:
         with torch.no_grad():
             probs = torch.softmax(self.net(x), 1)[0].cpu().numpy()
 
-        self.buf.append((t, probs, pL, LETTERS[int(probs.argmax())]))
+        self.frame_pred = LETTERS[int(probs.argmax())]
+        self.buf.append((t, probs, pL, self.frame_pred))
         return self._vote(t)
 
     def _vote(self, t):
