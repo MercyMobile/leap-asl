@@ -117,7 +117,7 @@ def engine_loop(scratch, model):
                 STATE["tracking"] = bool(eng.buf)
                 STATE["hand"] = hand
                 STATE["fps"] = round(len(times) / 2.0, 1)
-                STATE.update({k: eng.stats[k] for k in ("frames", "no_hand", "gated", "emitted")})
+                STATE.update({k: eng.stats[k] for k in ("frames", "no_hand", "gated", "voted", "emitted")})
                 if ev:
                     text.append(ev.letter)
                     STATE["letters"] = [{"l": e, "t": round(t, 2)} for e in text[-40:]]
