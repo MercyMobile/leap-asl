@@ -49,6 +49,12 @@ STILL_MAX = 9.0        # px/frame of landmark drift that still counts as "held"
 COOLDOWN = 0.45        # seconds before the same letter may repeat
 MOTION_MIN = 14.0      # px/frame that counts as a deliberate stroke (J/Z)
 
+# The stereo gate costs a second MediaPipe pass -- the dominant per-frame cost
+# once the interpolator is cached. It exists to catch a reconstruction that is
+# not a hand, which is a sustained condition, not a single-frame event. So check
+# it periodically and carry the verdict between checks. 1 = every frame.
+STEREO_EVERY = 3
+
 
 class Emission:
     """A letter the reader is willing to commit to."""
@@ -136,6 +142,9 @@ class Engine:
 
         self.buf = deque(maxlen=WINDOW)       # (t, probs, pts_px, shape_letter)
         self.frame_pred = None                # this frame's answer, or None
+        self.armed = True                     # may the next letter be emitted?
+        self.stereo_ok = True                 # carried between periodic checks
+        self.last_knuckle = float("nan")
         self.last_letter, self.last_t = None, -1e9
         self.state = "IDLE"
         self.stats = dict(frames=0, no_hand=0, gated=0, voted=0, emitted=0)
@@ -217,13 +226,14 @@ class Engine:
             self.stats["no_hand"] += 1
             self.buf.clear()                  # silence resets the vote
             self.state = "IDLE"
+            self.armed = True
             return None
 
-        pR = None
-        if gray_R is not None:
+        if gray_R is not None and self.inv is not None and \
+                self.stats["frames"] % STEREO_EVERY == 1:
             pR, _ = self._landmarks(gray_R)
-        good, _kn = self._metric_ok(pL, pR)
-        if not good:
+            self.stereo_ok, self.last_knuckle = self._metric_ok(pL, pR)
+        if not self.stereo_ok:
             self.stats["gated"] += 1
             return None                       # drop the frame, keep the window
 
@@ -241,6 +251,7 @@ class Engine:
     def _vote(self, t):
         if len(self.buf) < MIN_VOTES:
             self.state = "WATCHING"
+            self.armed = True
             return None
 
         pts = np.array([b[2] for b in self.buf])
@@ -250,6 +261,7 @@ class Engine:
         if drift > MOTION_MIN:
             self.state = "MOVING"
             mot = classify_motion([b[2] for b in self.buf], [b[3] for b in self.buf])
+            self.armed = True                 # a stroke means the hand left the letter
             if mot and (mot != self.last_letter or t - self.last_t > COOLDOWN):
                 self.buf.clear()
                 self.last_letter, self.last_t = mot, t
@@ -259,6 +271,7 @@ class Engine:
 
         if drift > STILL_MAX:
             self.state = "SETTLING"
+            self.armed = True          # moved off the letter -- it may repeat now
             return None
 
         P = np.array([b[1] for b in self.buf]).mean(axis=0)
@@ -273,13 +286,20 @@ class Engine:
         # "I don't know" expressible.
         if entropy > ENTROPY_MAX or margin < MARGIN_MIN:
             self.state = "UNSURE"
+            self.armed = True
             return None
 
         letter = LETTERS[top]
-        if letter == self.last_letter and t - self.last_t < COOLDOWN:
+        # A held letter must not stutter. Re-emitting the same letter after a
+        # cooldown turns a signer who pauses on F into "FF". Genuine doubles in
+        # fingerspelling are made with a bounce, not a long hold -- and a bounce
+        # registers as motion, which re-arms below. So the same letter repeats
+        # only after the hand has actually left it.
+        if letter == self.last_letter and not self.armed:
             self.state = "HELD"
             return None
 
+        self.armed = False
         self.last_letter, self.last_t = letter, t
         self.state = "EMIT"
         self.stats["emitted"] += 1

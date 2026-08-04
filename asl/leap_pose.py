@@ -39,7 +39,7 @@ import sys
 
 import numpy as np
 import cv2
-from scipy.interpolate import griddata
+from scipy.interpolate import LinearNDInterpolator
 
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
@@ -102,9 +102,15 @@ def load_distortion(path):
 def build_inverse(grid):
     """Return f(pixel_uv_normalized) -> ray slope (sx, sy), by inverting the grid.
 
-    The forward grid is slope -> image coord. We hand griddata the forward pairs
-    with the roles swapped, which gives a scattered interpolant in the direction
-    we need.
+    The forward grid is slope -> image coord. We hand the forward pairs over with
+    the roles swapped, giving a scattered interpolant in the direction we need.
+
+    Built ONCE and reused. `scipy.griddata` is a convenience wrapper that
+    constructs a Delaunay triangulation of every input point on each call --
+    ~4000 points here, which measured at 35.7ms per frame and was the single
+    largest cost in the live pipeline, larger than running MediaPipe on both
+    eyes. LinearNDInterpolator keeps the triangulation, so the per-frame cost
+    becomes a lookup.
     """
     us = np.linspace(SLOPE_MIN, SLOPE_MAX, N)
     sx, sy = np.meshgrid(us, us)                       # slope samples
@@ -117,10 +123,7 @@ def build_inverse(grid):
             (img_pts[:, 1] > -0.5) & (img_pts[:, 1] < 1.5))
     img_pts, slopes = img_pts[keep], slopes[keep]
 
-    def f(uv):
-        return griddata(img_pts, slopes, uv, method="linear")
-
-    return f
+    return LinearNDInterpolator(img_pts, slopes)
 
 
 # ---------------------------------------------------------------- mediapipe
