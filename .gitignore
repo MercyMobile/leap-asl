@@ -1,0 +1,34 @@
+# Environment -- rebuild with: uv venv --python 3.12 venv
+venv/
+__pycache__/
+*.pyc
+
+# Third-party dataset clone (586M) -- git clone https://github.com/WenjinTao/ASLA-Leap
+ASLA-Leap/
+
+# Cached training arrays (106M) -- regenerate with asl/prep_data.py
+asl/data/
+
+# MediaPipe model (7.5M binary) -- see README for the download URL
+models/*.task
+
+# Ultraleap SDK sample sources. These are Ultraleap's code, not ours, and are not
+# ours to redistribute. Install the Hyperion/Gemini SDK to get them.
+src/CallbackSample.c
+src/CheckLicenseFlagSample.c
+src/DeviceTransformSample.c
+src/ExampleConnection.c
+src/ExampleConnection.h
+src/FiducialTrackingSample.c
+src/ImageSample.c
+src/InterpolationSample.c
+src/MultiDeviceSample.c
+src/PollingSample.c
+src/RecordPlaybackSample.c
+src/leapc_main.c
+src/CMakeLists.txt
+
+# Compiled binaries
+leap-grab
+leap-poll
+leap-rec

@@ -1,0 +1,29 @@
+#!/bin/bash
+# Leap Motion hand-detection test.
+# Runs the tracker for N seconds (default 30) and reports whether a hand was seen.
+# Usage: ~/leap/leap-test [seconds]
+
+SECS="${1:-30}"
+LOG=$(mktemp /tmp/leap-test.XXXXXX.log)
+
+echo "Leap Motion test — hold your hand over the sensor for the next ${SECS}s..."
+timeout "$SECS" stdbuf -oL ~/leap/leap-poll > "$LOG" 2>&1
+
+FRAMES=$(grep -c '^Frame ' "$LOG")
+HANDFRAMES=$(grep -E '^Frame .* with [1-9] hands?\.' -c "$LOG")
+MAXHANDS=$(grep -oE 'with [0-9]+ hands?' "$LOG" | grep -oE '[0-9]+' | sort -n | tail -1)
+
+echo
+echo "  frames captured : ${FRAMES}"
+echo "  frames w/ hands : ${HANDFRAMES}"
+echo "  max hands seen  : ${MAXHANDS:-0}"
+
+if [ "${HANDFRAMES:-0}" -gt 0 ]; then
+    echo
+    echo "  RESULT: HAND TRACKING CONFIRMED"
+else
+    echo
+    echo "  RESULT: device streaming, but no hand detected."
+    echo "  (sensor face-up, hand 10-25cm above it, nothing blocking the lens)"
+fi
+rm -f "$LOG"
