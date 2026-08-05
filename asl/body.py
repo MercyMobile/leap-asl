@@ -59,7 +59,7 @@ def make_pose(video=True):
         vision.PoseLandmarkerOptions(
             base_options=mp_python.BaseOptions(model_asset_path=POSE_TASK),
             running_mode=vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE,
-            num_poses=1, min_pose_detection_confidence=0.4))
+            num_poses=1, min_pose_detection_confidence=0.2))
 
 
 def make_face(video=True):
@@ -68,21 +68,50 @@ def make_face(video=True):
             base_options=mp_python.BaseOptions(model_asset_path=FACE_TASK),
             running_mode=vision.RunningMode.VIDEO if video else vision.RunningMode.IMAGE,
             num_faces=1, output_face_blendshapes=True,
-            min_face_detection_confidence=0.4))
+            min_face_detection_confidence=0.15))
 
 
 def read(frame, pose_lm, face_lm, ts):
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
-    pr = pose_lm.detect_for_video(img, ts)
-    fr = face_lm.detect_for_video(img, ts)
+    """Body from the full frame, face from a crop around the head.
+
+    Two stages, and the second is not optional. Run the face landmarker on a
+    whole 1920x1080 frame with a person 4 feet away and it finds nothing --
+    measured, repeatedly, at every confidence down to 0.2. Crop to the head
+    first and it succeeds immediately at 1x with no upscaling. The detector
+    needs the face to be a large fraction of what it is shown, not a large
+    number of pixels.
+
+    This is what MediaPipe Holistic did internally before 1.0 removed it, so
+    rebuilding Holistic means rebuilding this too.
+    """
+    H, W = frame.shape[:2]
+    rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    pr = pose_lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
+
     body = None
     if pr.pose_landmarks:
         body = np.array([[p.x, p.y, p.z, p.visibility] for p in pr.pose_landmarks[0]])
-    face = None
+    if body is None:
+        return None, None, None
+
+    # head box scaled off shoulder width, so it tracks distance automatically
+    nose = body[0]
+    sw = np.linalg.norm(body[11][:2] - body[12][:2])
+    half = max(sw * 0.9, 0.04)
+    x0, x1 = int(max(0, (nose[0] - half) * W)), int(min(W, (nose[0] + half) * W))
+    y0, y1 = int(max(0, (nose[1] - half) * H)), int(min(H, (nose[1] + half) * H))
+    if x1 - x0 < 32 or y1 - y0 < 32:
+        return body, None, None
+    crop = np.ascontiguousarray(rgb[y0:y1, x0:x1])
+
+    fr = face_lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=crop), ts)
+    face, blend = None, None
     if fr.face_landmarks:
-        face = np.array([[p.x, p.y, p.z] for p in fr.face_landmarks[0]])
-    blend = None
+        # crop-relative -> full-frame normalized, so it composes with the body
+        f = np.array([[p.x, p.y, p.z] for p in fr.face_landmarks[0]])
+        f[:, 0] = (f[:, 0] * (x1 - x0) + x0) / W
+        f[:, 1] = (f[:, 1] * (y1 - y0) + y0) / H
+        face = f
     if getattr(fr, "face_blendshapes", None):
         blend = {b.category_name: b.score for b in fr.face_blendshapes[0]}
     return body, face, blend
