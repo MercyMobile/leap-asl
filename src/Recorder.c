@@ -127,7 +127,14 @@ int main(int argc, char** argv){
      just above a puck sitting on a table, which is why range collapses past
      ~10in. HMD is what a headset mount uses: looking outward at hands held at
      arm's length and beyond. Cisco ran this controller on an HTC Vive and got
-     far more than two feet, which is the observation that led here. */
+     far more than two feet, which is the observation that led here.
+
+     MEASURED RESULT: it makes no difference. Four interleaved runs, 50 frames
+     per mode, hand at ~15in -- leapd found hands in 0/50 under BOTH desktop and
+     HMD. An earlier single run suggested 0/25 -> 12/25; that was noise. The
+     switch is kept because it is a legitimate option, not because it works.
+     Cisco's Vive range is explained by software, not policy: he ran Orion, and
+     Orion V4 was never released for Linux. */
   uint64_t policy = eLeapPolicyFlag_Images;
   if(argc > 4){
     if(!strcmp(argv[4], "hmd"))            policy |= eLeapPolicyFlag_OptimizeHMD;
