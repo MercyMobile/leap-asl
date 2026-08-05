@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fingerspelling capture</title>
+<style>
+  :root{
+    --ground:#0B0F0E;--panel:#141A19;--line:#2A3634;--ink:#E8EDEB;--muted:#7E8B88;
+    --accent:#5FD3B2;--warn:#E0A458;--bad:#D2705F;
+    --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:light){
+    :root{--ground:#EEF2F0;--panel:#fff;--line:#D3DCD8;--ink:#10201C;--muted:#5C6B67;
+          --accent:#1E8E71;--warn:#A9701F;--bad:#A8452F;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);
+       line-height:1.5;-webkit-text-size-adjust:100%}
+  .wrap{max-width:640px;margin:0 auto;padding:18px 16px 40px;
+        min-height:100vh;display:flex;flex-direction:column}
+  .top{display:flex;justify-content:space-between;align-items:baseline;
+       font-family:var(--mono);font-size:.7rem;letter-spacing:.12em;
+       text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+        padding:22px 20px;text-align:center;flex:1;display:flex;
+        flex-direction:column;justify-content:center;gap:14px}
+  .letter{font-family:var(--mono);font-weight:700;line-height:1;
+          font-size:clamp(6rem,42vw,14rem);color:var(--accent);letter-spacing:-.03em}
+  .cue{font-size:clamp(1rem,4.5vw,1.35rem);color:var(--ink);max-width:22ch;
+       margin:0 auto;text-wrap:balance}
+  .moving{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;
+          text-transform:uppercase;color:var(--warn)}
+  .msg{font-family:var(--mono);font-size:.8rem;min-height:1.2em;color:var(--muted)}
+  .msg.ok{color:var(--accent)} .msg.bad{color:var(--bad)}
+
+  .bar{display:flex;gap:10px;margin-top:16px}
+  button{font:inherit;font-weight:600;border-radius:12px;cursor:pointer;
+         border:1px solid var(--line);background:var(--panel);color:var(--ink);
+         padding:16px 14px;flex:1;min-height:60px;font-size:1rem;
+         -webkit-tap-highlight-color:transparent}
+  button.go{background:var(--accent);border-color:var(--accent);color:#04110D;
+            flex:2.2;font-size:1.15rem}
+  button.go:disabled{opacity:.5}
+  button:active{transform:translateY(1px)}
+  button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+  .rec{background:var(--bad);border-color:var(--bad);color:#fff}
+  .grid{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:16px}
+  .g{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);
+     display:flex;align-items:center;justify-content:center;
+     font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+  .g.has{background:color-mix(in srgb,var(--accent) 22%,transparent);
+         border-color:var(--accent);color:var(--accent)}
+  .g.now{outline:2px solid var(--ink);outline-offset:1px;color:var(--ink)}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><span id="subj"></span><span id="prog"></span></div>
+
+  <div class="card">
+    <div class="letter" id="letter">·</div>
+    <div class="cue" id="cue"></div>
+    <div class="moving" id="moving" hidden>Motion letter — sign it repeatedly</div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="bar">
+    <button id="prev">Back</button>
+    <button class="go" id="go">Record</button>
+    <button id="next">Skip</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</div>
+
+<script>
+let busy=false;
+async function get(p){ try{ return await (await fetch(p,{cache:'no-store'})).json(); }catch(e){ return null; } }
+
+function render(s){
+  if(!s) return;
+  document.getElementById('subj').textContent=s.subject||'';
+  document.getElementById('prog').textContent=`${s.index+1} / ${s.total}`;
+  document.getElementById('letter').textContent=s.letter||'·';
+  document.getElementById('cue').textContent=s.cue||'';
+  document.getElementById('moving').hidden=!s.dynamic;
+
+  const m=document.getElementById('msg');
+  m.className='msg'+(s.status==='done'?' ok':s.status==='failed'?' bad':'');
+  m.textContent = s.status==='recording' ? 'Recording — hold still'
+                : s.message || (s.status==='ready' ? 'Hold the shape, then press Record' : '');
+
+  const go=document.getElementById('go');
+  busy = s.status==='recording';
+  go.disabled=busy;
+  go.textContent = busy ? 'Hold…' : 'Record';
+  go.classList.toggle('rec', busy);
+
+  const g=document.getElementById('grid');
+  const caps=s.captured||{};
+  const keys=Object.keys(caps);
+  if(g.childElementCount!==keys.length){
+    g.innerHTML=keys.map(k=>`<div class="g" data-l="${k}">${k}</div>`).join('');
+  }
+  [...g.children].forEach(el=>{
+    const k=el.dataset.l;
+    el.classList.toggle('has',(caps[k]||0)>0);
+    el.classList.toggle('now',k===s.letter);
+  });
+}
+
+async function poll(){ render(await get('/state')); setTimeout(poll,400); }
+poll();
+
+document.getElementById('go').onclick=async()=>{ if(!busy){ await get('/record'); render(await get('/state')); } };
+document.getElementById('next').onclick=async()=>{ await get('/next'); render(await get('/state')); };
+document.getElementById('prev').onclick=async()=>{ await get('/prev'); render(await get('/state')); };
+addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='Enter'){ e.preventDefault(); document.getElementById('go').click(); }
+  if(e.code==='ArrowRight') document.getElementById('next').click();
+  if(e.code==='ArrowLeft') document.getElementById('prev').click();
+});
+</script>
+</body>
+</html>
