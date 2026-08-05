@@ -71,7 +71,7 @@ def make_face(video=True):
             min_face_detection_confidence=0.15))
 
 
-def read(frame, pose_lm, face_lm, ts):
+def read(frame, pose_lm, face_lm, ts, video=True):
     """Body from the full frame, face from a crop around the head.
 
     Two stages, and the second is not optional. Run the face landmarker on a
@@ -86,7 +86,8 @@ def read(frame, pose_lm, face_lm, ts):
     """
     H, W = frame.shape[:2]
     rgb = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    pr = pose_lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), ts)
+    _img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    pr = pose_lm.detect_for_video(_img, ts) if video else pose_lm.detect(_img)
 
     body = None
     if pr.pose_landmarks:
@@ -104,7 +105,8 @@ def read(frame, pose_lm, face_lm, ts):
         return body, None, None
     crop = np.ascontiguousarray(rgb[y0:y1, x0:x1])
 
-    fr = face_lm.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=crop), ts)
+    _c = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop)
+    fr = face_lm.detect_for_video(_c, ts) if video else face_lm.detect(_c)
     face, blend = None, None
     if fr.face_landmarks:
         # crop-relative -> full-frame normalized, so it composes with the body
