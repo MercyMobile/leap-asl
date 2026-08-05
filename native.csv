@@ -1,0 +1,3 @@
+frame_id,matched,leap_nhands,leap_conf,palm_x,palm_y,palm_z,grab_pct
+1,1,0,0.000,0.0,0.0,0.0,0
+73,1,0,0.000,0.0,0.0,0.0,0

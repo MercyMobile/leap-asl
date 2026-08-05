@@ -121,6 +121,18 @@ int main(int argc, char** argv){
   if(argc > 1) snprintf(g_dir, sizeof g_dir, "%s", argv[1]);
   if(argc > 2) g_want = atoi(argv[2]);
   if(argc > 3) g_interval_ms = atoi(argv[3]);
+  /* Optional 4th arg: "hmd" or "screentop" selects the tracking optimisation.
+     The service ships three exposure/tracking policies -- desktop, HMD and
+     screentop -- and DESKTOP IS THE DEFAULT. Desktop assumes a hand hovering
+     just above a puck sitting on a table, which is why range collapses past
+     ~10in. HMD is what a headset mount uses: looking outward at hands held at
+     arm's length and beyond. Cisco ran this controller on an HTC Vive and got
+     far more than two feet, which is the observation that led here. */
+  uint64_t policy = eLeapPolicyFlag_Images;
+  if(argc > 4){
+    if(!strcmp(argv[4], "hmd"))            policy |= eLeapPolicyFlag_OptimizeHMD;
+    else if(!strcmp(argv[4], "screentop")) policy |= eLeapPolicyFlag_OptimizeScreenTop;
+  }
   mkdir(g_dir, 0775);
 
   char csvp[512]; snprintf(csvp, sizeof csvp, "%s/native.csv", g_dir);
@@ -134,7 +146,9 @@ int main(int argc, char** argv){
   ConnectionCallbacks.on_image        = &OnImage;
 
   LEAP_CONNECTION *conn = OpenConnection();
-  LeapSetPolicyFlags(*conn, eLeapPolicyFlag_Images, 0);
+  LeapSetPolicyFlags(*conn, policy, 0);
+  if(policy != eLeapPolicyFlag_Images)
+    printf("tracking optimisation: %s\n", argv[4]);
 
   int guard = 0;
   while(!g_done && guard++ < 4000) usleep(50000);   /* up to 200s */
