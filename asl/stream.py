@@ -41,8 +41,23 @@ WRIST, MID_MCP = 0, 9
 INDEX_TIP, PINKY_TIP = 8, 20
 
 # ---- tuning. Every one of these is a guess until scored against a real signer.
-WINDOW = 24            # frames voted over (~0.2s at 115fps)
-MIN_VOTES = 8          # usable frames required before emitting anything
+# The window must be SHORTER than a letter, or it straddles two of them and the
+# frames can never agree. Spelling C-A-B with no pause at ~55fps gave ~14 frames
+# per letter; a 24-frame window spanned all three and dropped the middle letter
+# entirely. 12 fits inside a fast letter and still averages away single-frame noise.
+WINDOW = 12            # frames voted over (~0.2s at 55fps)
+MIN_VOTES = 6          # usable frames required before emitting anything
+
+# Fraction of frames in the window that must INDIVIDUALLY agree with the winner.
+#
+# Averaging probabilities was the wrong question. Moving into a letter, the hand
+# passes through shapes whose averaged probability looks confident even though no
+# two frames agree -- so the reader fired before the hand had arrived. Raising the
+# vote count fixed that but then missed fast spelling, because no letter ever held
+# still long enough. Agreement separates the two cases directly: during a hold
+# every frame says the same letter, during a transition they flicker. That lets
+# MIN_VOTES come DOWN (faster) while transitional misfires go away.
+AGREE_MIN = 0.72
 ENTROPY_MAX = 2.10     # nats. Uniform over 24 letters is ln(24) = 3.18
 MARGIN_MIN = 0.12      # top prob minus runner-up, averaged over the window
 STILL_MAX = 9.0        # px/frame of landmark drift that still counts as "held"
@@ -108,8 +123,12 @@ def classify_motion(paths, shapes):
     pinky_travel = np.linalg.norm(np.diff(pinky, axis=0), axis=1).sum() / span
     index_travel = np.linalg.norm(np.diff(index, axis=0), axis=1).sum() / span
 
-    # Z: index leads, and it zigzags horizontally
-    if (index_travel > 1.4 and index_travel > pinky_travel
+    # Z: index leads, zigzags horizontally, AND the index is actually extended.
+    # Without the last condition F fired as Z every time: forming F pinches the
+    # index to the thumb, and that fingertip travel looks exactly like a stroke.
+    THUMB_TIP = 4
+    pinch = np.linalg.norm(P[:, INDEX_TIP] - P[:, THUMB_TIP], axis=1).mean() / span
+    if (index_travel > 1.4 and index_travel > pinky_travel and pinch > 0.9
             and _reversals(index, 0, jitter) >= 2):
         return "Z"
 
@@ -162,6 +181,7 @@ class Engine:
 
         self.buf = deque(maxlen=WINDOW)       # (t, probs, pts_px, shape_letter)
         self.frame_pred = None                # this frame's answer, or None
+        self._changed = 0                     # consecutive frames disagreeing with the buffer
         self.armed = True                     # may the next letter be emitted?
         self.stereo_ok = True                 # carried between periodic checks
         self.last_knuckle = float("nan")
@@ -275,13 +295,38 @@ class Engine:
             probs = torch.softmax(self.net(x), 1)[0].cpu().numpy()
 
         self.frame_pred = LETTERS[int(probs.argmax())]
+
+        # If the hand has moved to a NEW letter, the frames from the old one are
+        # no longer evidence -- they are interference. Without this, a letter that
+        # was just committed keeps refilling the buffer while it is still being
+        # held, and the next letter never wins agreement against it. That is what
+        # dropped the middle letter of a word: C-A-B came out CB because A spent
+        # its whole life outvoted by leftover C frames. Two consecutive
+        # disagreeing frames, so single-frame noise does not flush the buffer.
+        if self.buf:
+            majority = max(set(b[3] for b in self.buf),
+                           key=[b[3] for b in self.buf].count)
+            if self.frame_pred != majority:
+                self._changed += 1
+                if self._changed >= 2:
+                    self.buf.clear()
+                    self.armed = True          # a different letter may always emit
+                    self._changed = 0
+            else:
+                self._changed = 0
+
         self.buf.append((t, probs, pL, self.frame_pred))
         return self._vote(t)
 
     def _vote(self, t):
         if len(self.buf) < MIN_VOTES:
             self.state = "WATCHING"
-            self.armed = True
+            # Deliberately does NOT re-arm. The buffer is emptied after every
+            # emission, so WATCHING is the normal state immediately AFTER a letter
+            # -- re-arming here let the same held letter fire again as soon as the
+            # buffer refilled, turning CAB into CCABB. Re-arming belongs to the
+            # states that mean the hand actually left the letter: SETTLING, UNSURE,
+            # MOVING, IDLE.
             return None
 
         pts = np.array([b[2] for b in self.buf])
@@ -307,6 +352,14 @@ class Engine:
         P = np.array([b[1] for b in self.buf]).mean(axis=0)
         order = P.argsort()[::-1]
         top, second = order[0], order[1]
+
+        # do the individual frames actually agree, or does only the average look good?
+        winner = LETTERS[top]
+        agree = sum(1 for b in self.buf if b[3] == winner) / len(self.buf)
+        if agree < AGREE_MIN:
+            self.state = "SETTLING"
+            self.armed = True
+            return None
         entropy = float(-(P * np.log(P + 1e-9)).sum())
         margin = float(P[top] - P[second])
         self.stats["voted"] += 1
@@ -333,7 +386,12 @@ class Engine:
         self.last_letter, self.last_t = letter, t
         self.state = "EMIT"
         self.stats["emitted"] += 1
-        return Emission(letter, float(P[top]), t, len(self.buf))
+        n = len(self.buf)
+        # Start the next letter from a clean buffer. Otherwise the frames that
+        # produced THIS letter linger and fight the next one for agreement, which
+        # is what made fast spelling drop letters in the middle of a word.
+        self.buf.clear()
+        return Emission(letter, float(P[top]), t, n)
 
     def close(self):
         self.lm.close()

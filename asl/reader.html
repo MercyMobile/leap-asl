@@ -31,7 +31,7 @@
   #readout:empty::after{content:"waiting for a hand";font-size:1rem;letter-spacing:.02em;
            color:var(--muted);font-family:var(--ui)}
 
-  .pip{position:absolute;right:12px;bottom:12px;width:clamp(120px,24%,220px);
+  .pip{position:absolute;right:12px;bottom:12px;width:clamp(150px,30%,270px);
        aspect-ratio:4/3;background:var(--panel-2);border:1px solid var(--line);
        border-radius:10px;overflow:hidden}
   .pip canvas{display:block;width:100%;height:100%}
@@ -105,15 +105,41 @@ function draw(pts, ok){
   if(!w||!h) return;
   cv.width=w*dpr; cv.height=h*dpr; g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,w,h);
+  // Between the two extremes. Fitting to the hand's bounding box made it fill
+  // the frame always, so you could read the shape but not see where you were.
+  // Mapping the sensor's whole 640x480 field showed position but made the hand
+  // too small to read. So: a fixed zoom that keeps the hand legible, with the
+  // view panning to follow it, clamped at the edges of what the sensor can see.
+  // Hitting a clamp is itself the signal that you are running out of room.
+  const SW=640, SH=480, VIEW=330;          // sensor px shown across the box
+  const sc=w/VIEW;
+  const vh=h/sc;                            // sensor px shown vertically
+  let cx=SW/2, cy=SH/2;
+  if(pts){
+    let sx=0, sy=0;
+    for(const [x,y] of pts){ sx+=x; sy+=y; }
+    cx=sx/pts.length; cy=sy/pts.length;
+  }
+  // smooth the follow so the view does not jitter with every frame
+  if(!draw.cx){ draw.cx=cx; draw.cy=cy; }
+  // Heavier smoothing plus a deadzone: below ~18 sensor px the view does not move
+  // at all. Chasing every small movement made the whole frame feel twitchy, and a
+  // self-view that shifts under you is worse than one that lags slightly.
+  const dx=cx-draw.cx, dy=cy-draw.cy;
+  if(Math.hypot(dx,dy) > 18){ draw.cx += dx*0.08; draw.cy += dy*0.08; }
+  const hx=Math.min(Math.max(draw.cx, VIEW/2), SW-VIEW/2);
+  const hy=Math.min(Math.max(draw.cy, vh/2),  SH-vh/2);
+  const ox=w/2-hx*sc, oy=h/2-hy*sc;
+
+  // edge of the sensor's field -- visible only when you are near it
+  g.strokeStyle=tok('--line'); g.lineWidth=2;
+  g.strokeRect(ox, oy, SW*sc, SH*sc);
   if(!pts){ return; }
-  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
-  for(const [x,y] of pts){x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);}
-  const pad=10, s=Math.min((w-2*pad)/Math.max(x1-x0,1),(h-2*pad)/Math.max(y1-y0,1));
-  const P=pts.map(([x,y])=>[(x-x0)*s+(w-(x1-x0)*s)/2,(y-y0)*s+(h-(y1-y0)*s)/2]);
+  const P=pts.map(([x,y])=>[ox+x*sc, oy+y*sc]);
   const col = ok? tok('--accent') : tok('--warn');
-  g.strokeStyle=col; g.fillStyle=col; g.lineCap='round'; g.lineWidth=2.2;
+  g.strokeStyle=col; g.fillStyle=col; g.lineCap='round'; g.lineWidth=3.2;
   for(const [a,b] of LIMBS){g.beginPath();g.moveTo(P[a][0],P[a][1]);g.lineTo(P[b][0],P[b][1]);g.stroke();}
-  for(const p of P){g.beginPath();g.arc(p[0],p[1],2.3,0,6.29);g.fill();}
+  for(const p of P){g.beginPath();g.arc(p[0],p[1],3.2,0,6.29);g.fill();}
 }
 
 function render(s){

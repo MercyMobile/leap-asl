@@ -39,6 +39,7 @@ STATE = {
 }
 LOCK = threading.Lock()
 STOP = threading.Event()
+TEXT = []          # the authoritative letter list; /clear must empty THIS
 
 
 def capture_loop(scratch, interval_ms):
@@ -68,7 +69,6 @@ def engine_loop(scratch, model):
                  if os.path.exists(os.path.join(scratch, "distortion_L.txt")) else None)
     seen = set()
     times = []
-    text = []
 
     while not STOP.is_set():
         try:
@@ -119,9 +119,10 @@ def engine_loop(scratch, model):
                 STATE["fps"] = round(len(times) / 2.0, 1)
                 STATE.update({k: eng.stats[k] for k in ("frames", "no_hand", "gated", "voted", "emitted")})
                 if ev:
-                    text.append(ev.letter)
-                    STATE["letters"] = [{"l": e, "t": round(t, 2)} for e in text[-40:]]
-                    STATE["text"] = "".join(text[-40:])
+                    TEXT.append(ev.letter)
+                    del TEXT[:-40]
+                    STATE["letters"] = [{"l": e, "t": round(t, 2)} for e in TEXT]
+                    STATE["text"] = "".join(TEXT)
     eng.close()
 
 
@@ -142,6 +143,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/clear"):
             with LOCK:
+                TEXT.clear()
                 STATE["letters"] = []; STATE["text"] = ""
             self.send_response(204); self.end_headers()
             return
