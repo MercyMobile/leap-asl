@@ -237,8 +237,14 @@ for(const b of document.querySelectorAll('.preset')){
   b.onclick=async()=>{ TUNE=await (await fetch('/tune?preset='+b.dataset.p)).json(); };
 }
 document.getElementById('rec').onclick=async()=>{
-  const w=document.getElementById('word').value.trim()||'CLIP';
+  const box=document.getElementById('word'), w=box.value.trim();
   const on=document.getElementById('rec').textContent==='Stop';
+  // The word is the clip's label and the only record of what was SIGNED, so a
+  // clip saved without one cannot be scored later. Refuse instead of guessing.
+  if(!on && !w){
+    document.getElementById('recsay').textContent='type the word you are about to sign';
+    box.focus(); return;
+  }
   const r=await (await fetch(on?'/record?stop=1':'/record?word='+encodeURIComponent(w))).json();
   document.getElementById('recsay').textContent=r.msg||'';
 };
