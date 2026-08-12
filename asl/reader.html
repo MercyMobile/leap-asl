@@ -47,6 +47,18 @@
   button:hover{border-color:var(--accent);color:var(--accent)}
   button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
+  .lbl{font-family:var(--mono);font-size:.6rem;letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}
+  .sep{width:1px;height:22px;background:var(--line)}
+  input{font:inherit;font-size:.85rem;color:var(--ink);background:var(--panel-2);
+        border:1px solid var(--line);padding:7px 10px;border-radius:7px;width:9em;
+        text-transform:uppercase;letter-spacing:.08em}
+  button.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
+  button.rec{border-color:var(--bad);color:var(--bad)}
+  .hold{height:6px;background:var(--panel-2);border:1px solid var(--line);
+        border-radius:4px;overflow:hidden;margin:0 0 18px}
+  .hold-fill{height:100%;width:0;background:var(--muted);transition:width .06s linear}
+  .hold-fill.ready{background:var(--accent)}
+  #readout .gone{color:var(--bad);text-decoration:line-through;opacity:.55}
   .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;
            background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
   .m{background:var(--panel);padding:11px 13px}
@@ -75,7 +87,26 @@
   <div class="bar">
     <button id="clear">Clear</button>
     <button id="space">Space</button>
+    <span class="sep"></span>
+    <span class="lbl">Patience</span>
+    <button class="preset" data-p="fast">Fast</button>
+    <button class="preset" data-p="normal">Normal</button>
+    <button class="preset" data-p="careful">Careful</button>
+    <button class="preset" data-p="deliberate">Deliberate</button>
+    <span class="lbl" id="dwellsay"></span>
   </div>
+
+  <div class="bar">
+    <label class="lbl" for="word">Record what you sign</label>
+    <input id="word" placeholder="HILLY" size="10" autocomplete="off" />
+    <button id="rec">Record</button>
+    <span class="lbl" id="recsay"></span>
+  </div>
+
+  <!-- How long the current shape has been held, against how long it must be.
+       Full bar = the letter commits. This is the whole reason a letter appears
+       or does not, so it is on the screen instead of in a log. -->
+  <div class="hold"><div class="hold-fill" id="holdfill"></div></div>
 
   <div class="metrics">
     <div class="m"><span class="k">Rate</span><span class="v" id="m-fps">—</span></div>
@@ -83,12 +114,20 @@
     <div class="m"><span class="k">No hand</span><span class="v" id="m-nohand">—</span></div>
     <div class="m"><span class="k">Gated</span><span class="v" id="m-gated">—</span></div>
     <div class="m"><span class="k">Letters</span><span class="v" id="m-em">—</span></div>
+    <div class="m"><span class="k">Taken back</span><span class="v" id="m-retr">—</span></div>
+    <div class="m"><span class="k">Relocks</span><span class="v" id="m-relock">—</span></div>
+    <div class="m"><span class="k">Travel</span><span class="v" id="m-palm">—</span></div>
+    <div class="m"><span class="k">Shape spd</span><span class="v" id="m-shape">—</span></div>
   </div>
 
   <p class="note">
     The corner shows the hand as the machine sees it. Green means it is tracked and being read;
-    amber means a landmark was dropped by a quality gate. Nothing is committed to the readout
-    until the same letter holds steady across a run of frames.
+    amber means a landmark was dropped by a quality gate. A letter is committed only after the
+    shape has been held <em>still</em> for the patience setting &mdash; the bar above fills as you
+    hold, and the letter lands when it is full. Moving between letters resets it, which is what
+    stops shapes you pass through from being read as letters you never signed. If one slips
+    through anyway and the next letter is held much longer, the reader takes the first one back
+    and you will see it struck out for a moment.
   </p>
 </div>
 
@@ -142,9 +181,11 @@ function draw(pts, ok){
   for(const p of P){g.beginPath();g.arc(p[0],p[1],3.2,0,6.29);g.fill();}
 }
 
+let TUNE={}, PRESET='';
 function render(s){
   const r=document.getElementById('readout');
   const txt=s.text||"";
+  TUNE=s.tune||TUNE;
   if(txt!==last){
     // highlight whatever arrived since the last poll
     const grown = txt.length>prevLen ? txt.length-prevLen : 0;
@@ -162,6 +203,23 @@ function render(s){
   document.getElementById('m-nohand').textContent=s.no_hand??'—';
   document.getElementById('m-gated').textContent=s.gated??'—';
   document.getElementById('m-em').textContent=s.emitted??'—';
+  document.getElementById('m-retr').textContent=s.retracted??'—';
+  document.getElementById('m-relock').textContent=s.relocks??'—';
+  document.getElementById('m-palm').textContent=(s.travel??0).toFixed(1);
+  document.getElementById('m-shape').textContent=(s.shape??0).toFixed(1);
+  const need=(TUNE.dwell_sec||0.16), frac=Math.min(1,(s.dwell||0)/need);
+  const hf=document.getElementById('holdfill');
+  hf.style.width=(frac*100).toFixed(0)+'%';
+  hf.classList.toggle('ready', frac>=1);
+  if(s.preset && s.preset!==PRESET){
+    PRESET=s.preset;
+    for(const b of document.querySelectorAll('.preset')) b.classList.toggle('on', b.dataset.p===PRESET);
+  }
+  document.getElementById('dwellsay').textContent='hold '+Math.round(need*1000)+' ms';
+  const rec=document.getElementById('rec'), rs=document.getElementById('recsay');
+  if(s.recording){ rec.textContent='Stop'; rec.classList.add('rec');
+                   rs.textContent=s.recording.word+'  '+s.recording.frames+' frames'; }
+  else { rec.textContent='Record'; rec.classList.remove('rec'); }
   draw(s.hand, s.state!=='UNSURE');
 }
 
@@ -174,6 +232,15 @@ poll();
 
 document.getElementById('clear').onclick=async()=>{
   await fetch('/clear'); last=""; prevLen=0; document.getElementById('readout').textContent='';
+};
+for(const b of document.querySelectorAll('.preset')){
+  b.onclick=async()=>{ TUNE=await (await fetch('/tune?preset='+b.dataset.p)).json(); };
+}
+document.getElementById('rec').onclick=async()=>{
+  const w=document.getElementById('word').value.trim()||'CLIP';
+  const on=document.getElementById('rec').textContent==='Stop';
+  const r=await (await fetch(on?'/record?stop=1':'/record?word='+encodeURIComponent(w))).json();
+  document.getElementById('recsay').textContent=r.msg||'';
 };
 document.getElementById('space').onclick=()=>{
   const r=document.getElementById('readout'); r.textContent=r.textContent+' ';

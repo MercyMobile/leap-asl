@@ -143,14 +143,63 @@ data for either letter, a legible rule that a signer can help tune beats a model
 fit to nothing.
 
 Verified against synthetic trajectories: J fires on a hook and not on a fist, Z
-fires on a zigzag, a held hand stays silent. **All thresholds are guesses until
-scored against a real signer.**
+fires on a zigzag, a held hand stays silent. On *real* capture neither ever
+fired until the trajectory window was separated from the vote window: the vote
+window is deliberately shorter than a letter (0.2s), and a Z is three strokes
+over about a second, so the two reversals it looks for could not be inside it.
+With a 0.9s trajectory buffer, an 8-second burst of repeated J's now yields J's
+and a burst of Z's yields Z's -- mixed with static letters read during the
+pauses between repetitions.
+
+## Segmentation: why a letter appears
+
+The reader's hardest job is not naming a handshape, it is deciding *when* a
+handshape was a letter somebody meant. Crossing from H to I the hand passes
+through shapes that look like other letters, and an early version committed
+them -- spelling HILLY produced a Q that was never signed.
+
+What decides now, in order:
+
+1. **Dwell.** The frame-level prediction must stay the same letter for
+   `dwell_sec` before anything is committed. A shape on the way somewhere does
+   not stand still for a sixth of a second.
+2. **A movement lockout.** Sustained coherent movement pushes commitment out by
+   `settle_sec`, so the quiet instant at the top of a transition arc is still
+   inside the shadow of the movement that made it.
+3. **Agreement, entropy, margin** across the vote window, as before.
+4. **Retraction.** A letter committed on a near-minimum dwell, immediately
+   followed by one held much longer, is taken back out of the word.
+
+Two measurements changed the design. Movement is **speed plus straightness**,
+never speed alone: a dead-still D dances at 10.9 spans/sec of centroid travel --
+faster than a real J stroke -- but covers 5% of its own path length, where J
+covers 71% and Z 97%. And stillness is **not** required for dwell, because some
+handshapes are tracked too badly to ever be still: that same D reads 25-70
+spans/sec of raw landmark jitter while the classifier calls it D on 400 frames
+out of 400. The tracker is noisy; the shape is not.
+
+Every threshold is in seconds and hand-spans per second, never frames or pixels,
+so the reader behaves the same at 55fps and 115fps and at any distance from the
+sensor.
+
+### Patience presets
+
+| preset | dwell | keeps up with |
+|---|---|---|
+| fast | 100ms | ~6 letters/sec |
+| normal | 160ms | ~5 letters/sec |
+| careful | 240ms | ~3.5 letters/sec |
+| deliberate | 360ms | slower than 3/sec |
+
+Switchable live from the reader page, or `--preset` at startup. The trade is
+one-for-one: patience is bought with speed.
 
 ## Layout
 
 ```
 asl/leap_pose.py     stereo IR -> metric 3D -> .pose        (the bridge)
-asl/stream.py        rolling-window reader: voting, rejection, J/Z motion
+asl/stream.py        rolling-window reader: dwell, voting, rejection, J/Z motion
+asl/words.py         word-level regression: synthetic pace sweep + clip replay
 asl/reader.py        live server -- capture, read, serve the interface
 asl/reader.html      picture-in-picture UI: self-view skeleton + readout
 asl/capture.py       labeled capture, built for one hour with a fluent signer
@@ -171,7 +220,22 @@ venv/bin/python asl/capture.py speed --subject interp1 --words CISCO MERCY
 venv/bin/python asl/score.py --subject interp1             # the actual number
 venv/bin/python asl/finetune.py --subjects interp1         # adapt to this rig
 venv/bin/python asl/reader.py                              # live, port 8770
+venv/bin/python asl/reader.py --preset careful             # hold each letter longer
+venv/bin/python asl/words.py --synth --sweep               # pace vs. preset
+venv/bin/python asl/words.py --clip asl/data/raw/live/HILLY-1786553040 --sweep
 ```
+
+The reader page has a **Record** button. Type the word you are about to sign,
+press it, spell, press stop -- the raw frames land in `asl/data/raw/live/<WORD>-<ts>/`
+with their real timestamps. That clip is the only kind of data that contains
+*transitions*, so it is the only thing that can measure letters the reader
+invented while the hand was on its way somewhere. Posed captures cannot: there
+is nothing between the letters in them.
+
+The default model is now `model_cisco26b.pt` (99.5% per frame on Cisco's posed
+set). It used to be `model_loso0.pt`, the ASLA-Leap transfer model, which scores
+**37.8%** on the same frames -- so anyone following this README was reading with
+the wrong model, which on its own produces letters nobody signed.
 
 Capture is resumable and never asks a question mid-session — Ctrl-C leaves
 everything recorded so far on disk.
